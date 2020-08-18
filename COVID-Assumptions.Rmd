@@ -1,0 +1,143 @@
+---
+title: "COVID-Assumptions"
+author: "JiaYuan Liu"
+date: "18/06/2020"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(rms)
+# import data
+modeling_data_province <- read.csv(file = "/Users/ljy/Desktop/CleanedData/modeling_data_province.csv")
+modeling_data_province
+```
+```{r}
+## Create training and test set ##
+set.seed(1004793841)
+train <- modeling_data_province[sample(seq_len(nrow(modeling_data_province)), size = 400),]
+nrow(train)
+length(which(modeling_data_province$X %in% train$X))
+test <- modeling_data_province[!modeling_data_province$X %in% train$X,]
+nrow(test)
+```
+
+
+# First fit a MLR
+```{r}
+model <- lm(Score ~ New.Cases + New.Deaths + Mean.Temperature + Total.Precipitation + New.Cases..world. + New.Deaths..world. + Days.Since.First.Case, data = train)
+summary(model)
+```
+# Check Assumptions
+```{r}
+resid <- rstudent(model)
+fitted <- predict(model)
+
+# Normal QQ Plot and Standardized Residuals Plot
+par(family = 'serif', mfrow = c(1,2))
+qqnorm(resid)
+qqline(resid)
+plot(resid ~ fitted, type = "p", xlab = "Fitted Values", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "red")
+lines(lowess(fitted, resid), col = "blue")
+```
+```{r}
+# abline(lm(resid ~ fitted), lwd = 2, col = "blue")
+
+# Response vs Fitted values
+par(family = 'serif')
+plot(train$Score ~ fitted, type = "p", xlab = "Fitted Values", 
+     ylab = "Score", cex.lab = 1.2,
+     col = "red")
+abline(lm(train$Score ~ fitted), lwd = 2, col = "blue")
+lines(lowess(fitted, train$Score), col = "red")
+```
+
+# Leverage Points
+```{r}
+h <- hatvalues(model)
+thresh <- 2 * (dim(model.matrix(model))[2])/nrow(modeling_data_province)
+w <- which(h > thresh)
+w
+```
+```{r}
+modeling_data_province[w,]
+```
+# Influential Observations
+```{r}
+# Observations
+n <- 695
+
+# Predictors
+p <- 7
+
+# Cooks' Distance
+D <- cooks.distance(model)
+which(D > qf(0.5, p + 1, n - p - 1))
+```
+```{r}
+# DFFITS
+dfits <- dffits(model)
+which(abs(dfits) > 2*sqrt((p + 1)/n))
+```
+```{r}
+# DFBETAS
+dfb <- dfbetas(model)
+which(abs(dfb[,1]) > 2/sqrt(n))
+```
+
+```{r}
+## Step wise selection
+## Based on AIC
+n <- nrow(train)
+sel.var.aic <- step(model, trace = 0, k = 2, direction = "both") 
+sel.var.aic<-attr(terms(sel.var.aic), "term.labels")   
+sel.var.aic
+```
+```{r}
+### Cross Validation and prediction performance of AIC based selection ###
+ols.aic <- ols(Score ~ ., data = train[, which(colnames(train) 
+                                                  %in% c(sel.var.aic, "Score"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+aic.cross <- calibrate(ols.aic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(aic.cross, las = 1, xlab = "Predicted Probability", 
+     main = "Cross-Validation calibration with AIC")
+
+## Test Error ##
+pred.aic <- predict(ols.aic, newdata = test[,which(colnames(train) 
+                                                   %in% c(sel.var.aic, "Score"))])
+## Prediction error ##
+pred.error.AIC <- mean((test$Score - pred.aic)^2)
+```
+
+
+```{r}
+## Based on BIC ##
+n <- nrow(train)
+sel.var.bic <- step(model, trace = 0, k = log(n), direction = "both") 
+sel.var.bic<-attr(terms(sel.var.bic), "term.labels")   
+sel.var.bic
+```
+
+```{R}
+### Cross Validation and prediction performance of BIC based selection ###
+ols.bic <- ols(Score ~ ., data = train[,which(colnames(train) 
+                                                 %in% c(sel.var.bic, "Score"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+bic.cross <- calibrate(ols.bic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(bic.cross, las = 1, xlab = "Predicted Probability", 
+     main = "Cross-Validation calibration with BIC")
+
+## Test Error ##
+pred.bic <- predict(ols.bic, newdata = test[,which(colnames(train) 
+                                                   %in% c(sel.var.bic, "Score"))])
+## Prediction error ##
+pred.error.BIC <- mean((test$Score - pred.bic)^2)
+```
